@@ -1,0 +1,31 @@
+@page "/"
+@layout Layout.BlankLayout
+
+<PageTitle>Вход — ДолжничОК</PageTitle>
+<div class="login-page">
+    <a class="brand login-brand" href="/" aria-label="ДолжничОК — на главную"><span class="brand-mark">Д</span><span>Должнич<span class="brand-accent">ОК</span></span></a>
+    <main class="login-card">
+        <p class="eyebrow">Университетский сервис</p><h1>Вход</h1>
+        <p class="login-intro">Войдите под своей учётной записью, чтобы записаться на приём или управлять расписанием.</p>
+        @if (Error == "invalid") { <p class="form-message form-message-error" role="alert">Неверный логин, пароль или роль.</p> }
+        @if (Error == "profile") { <p class="form-message form-message-error" role="alert">Для учётной записи не настроен профиль. Обратитесь к администратору.</p> }
+        @if (Error == "register") { <p class="form-message form-message-error" role="alert">Не удалось создать учётную запись. Проверьте данные или обратитесь к администратору.</p> }
+        <form method="post" action="/account/login">
+            <AntiforgeryToken />
+            <label class="field-label" for="role">Роль</label>
+            <select id="role" class="form-control" name="Role"><option value="Student">Студент</option><option value="Teacher">Преподаватель</option></select>
+            <label class="field-label" for="login">Логин</label>
+            <input id="login" class="form-control" name="UserName" required autocomplete="username" />
+            <label class="field-label" for="password">Пароль</label>
+            <input id="password" class="form-control" type="password" name="Password" required autocomplete="current-password" />
+            <div class="login-actions"><button class="button button-primary" type="submit">Войти</button></div>
+        </form>
+        <p class="field-hint">Студенты могут зарегистрироваться самостоятельно. Учётные записи преподавателей создаются при настройке сервиса.</p>
+        <p><a href="/registratsiya">Создать учётную запись студента</a></p>
+    </main>
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "error")]
+    private string? Error { get; set; }
+}

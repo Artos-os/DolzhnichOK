@@ -1,0 +1,11 @@
+bin/
+obj/
+.vs/
+*.user
+*.suo
+.env
+.env.*
+!.env.example
+db-data/
+.nuget/
+.tools/

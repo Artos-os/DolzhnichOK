@@ -1,0 +1,96 @@
+@page "/student"
+@rendermode InteractiveServer
+@attribute [Authorize(Roles = "Student")]
+@using System.Security.Claims
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+@inject AuthenticationStateProvider AuthState
+@inject NavigationManager Navigation
+
+<PageTitle>Окна приёма — ДолжничОК</PageTitle>
+<section class="page-frame">
+    <div class="page-heading"><div><p class="eyebrow">Кабинет студента</p><h1>Окна приёма</h1></div><div class="user-actions"><span class="user-label">@studentName</span><form method="post" action="/account/logout"><AntiforgeryToken /><button class="button button-outline" type="submit">Выйти</button></form></div></div>
+    <div class="form-divider"></div>
+    <div class="filters" aria-label="Поиск и фильтры">
+        <label class="filter-control search-control"><span>Преподаватель</span><input class="form-control" @bind="search" @bind:event="oninput" placeholder="ФИО преподавателя" /></label>
+        <label class="filter-control"><span>Предмет</span><select class="form-control" @bind="subjectFilter"><option value="">Все предметы</option>@foreach (var s in subjects) { <option value="@s">@s</option> }</select></label>
+        <label class="filter-control"><span>Кафедра</span><select class="form-control" @bind="departmentFilter"><option value="">Все кафедры</option>@foreach (var d in departments) { <option value="@d">@d</option> }</select></label>
+        <label class="filter-control"><span>Сортировка</span><select class="form-control" @bind="sort"><option value="date">Сначала ближайшие</option><option value="subject">По предмету</option></select></label>
+    </div>
+    @if (!string.IsNullOrWhiteSpace(message)) { <p class="form-message" role="status">@message</p> }
+    @if (notifications.Count > 0) { <details class="notification-panel" open><summary>Уведомления (@notifications.Count)</summary>@foreach (var n in notifications) { <p><strong>@n.Title</strong> · @n.CreatedAtUtc.ToLocalTime().ToString("dd.MM HH:mm")<br />@n.Message</p> }</details> }
+    @if (loading) { <p>Загружаем расписание…</p> }
+    else if (!VisibleSessions.Any()) { <div class="empty-state"><h2>Нет доступных окон</h2><p>Попробуйте изменить фильтры или вернитесь позже.</p></div> }
+    else {
+        <p class="results-count">Найдено окон: <strong>@VisibleSessions.Count()</strong></p>
+        <div class="session-list">
+        @foreach (var s in VisibleSessions) {
+            var booking = s.Bookings.FirstOrDefault(b => b.Status == BookingStatus.Active && b.StudentId == studentId);
+            var free = s.Capacity - s.Bookings.Count(b => b.Status == BookingStatus.Active);
+            <article class="session-card"><div class="session-info"><div class="session-title-row"><h2>@s.Teacher.FullName</h2><span class="status-pill @(booking is not null ? "status-signed" : free == 0 ? "status-full" : "")">@(s.Status != ResitSessionStatus.Open ? StatusText(s.Status) : booking is not null ? "Вы записаны" : free == 0 ? "Мест нет" : "Открыто")</span></div>
+                <p class="session-subject"><strong>Предмет:</strong> @s.Subject.Name</p><p class="session-meta">@s.Teacher.Department.Name · @s.Classroom.Number · @StatusText(s.Status, free)</p><p class="session-meta">@s.StartsAt.ToLocalTime().ToString("dd.MM.yyyy · HH:mm")–@s.EndsAt.ToLocalTime().ToString("HH:mm") · Свободно мест: @free из @s.Capacity</p>
+                @if (booking is not null) { <p class="session-meta">Ваша запись: @booking.CreatedAtUtc.ToLocalTime().ToString("dd.MM.yyyy HH:mm")</p> }
+                <details><summary>Комментарии (@s.Comments.Count)</summary><div class="comment-list">@foreach (var c in s.Comments.OrderBy(c => c.CreatedAtUtc)) { <p><strong>@c.Author.UserName</strong> · @c.CreatedAtUtc.ToLocalTime().ToString("dd.MM HH:mm")<br />@c.Text</p> }</div>
+                    @if (booking is not null) { <div class="comment-compose"><input class="form-control" @bind="commentText" placeholder="Вопрос по этому окну" maxlength="2000" /><button class="button button-outline" @onclick="() => AddComment(s.Id)">Отправить</button></div> }
+                </details></div>
+                @if (booking is not null) { <button class="button button-outline" @onclick="() => CancelBooking(s.Id)">Отменить запись</button> }
+                else if (free > 0 && s.Status == ResitSessionStatus.Open) { <button class="button button-primary" @onclick="() => Book(s.Id)">Записаться</button> }
+            </article>
+        }
+        </div>
+    }
+</section>
+
+@code {
+    private List<ResitSession> sessions = [];
+    private List<Notification> notifications = [];
+    private int studentId, userId;
+    private string studentName = "Студент", search = "", subjectFilter = "", departmentFilter = "", sort = "date", commentText = "";
+    private string? message;
+    private bool loading = true;
+    private IEnumerable<string> subjects => sessions.Select(s => s.Subject.Name).Distinct().Order();
+    private IEnumerable<string> departments => sessions.Select(s => s.Teacher.Department.Name).Distinct().Order();
+    private IEnumerable<ResitSession> VisibleSessions => (sort == "subject" ? sessions.OrderBy(s => s.Subject.Name).ThenBy(s => s.StartsAt) : sessions.OrderBy(s => s.StartsAt))
+        .Where(s => s.Teacher.FullName.Contains(search, StringComparison.CurrentCultureIgnoreCase) && (subjectFilter == "" || s.Subject.Name == subjectFilter) && (departmentFilter == "" || s.Teacher.Department.Name == departmentFilter));
+
+    protected override async Task OnInitializedAsync() {
+        var principal = (await AuthState.GetAuthenticationStateAsync()).User;
+        if (!int.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out userId)) { Navigation.NavigateTo("/"); return; }
+        var profile = await Db.Students.SingleOrDefaultAsync(x => x.UserId == userId);
+        if (profile is null) { Navigation.NavigateTo("/"); return; }
+        studentId = profile.Id; studentName = profile.FullName;
+        await Load(); notifications = await Db.Notifications.AsNoTracking().Where(n => n.UserId == userId).OrderByDescending(n => n.CreatedAtUtc).Take(10).ToListAsync(); loading = false;
+    }
+    private async Task Load() => sessions = await Db.ResitSessions.AsNoTracking().Where(s => (s.Status == ResitSessionStatus.Open && s.StartsAt > DateTime.UtcNow) || s.Bookings.Any(b => b.StudentId == studentId))
+        .Include(s => s.Teacher).ThenInclude(t => t.Department).Include(s => s.Subject).Include(s => s.Classroom)
+        .Include(s => s.Bookings).Include(s => s.Comments).ThenInclude(c => c.Author).OrderBy(s => s.StartsAt).ToListAsync();
+    private async Task Book(int id) {
+        message = null;
+        await using var tx = await Db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
+        var s = await Db.ResitSessions.Include(x => x.Bookings).SingleOrDefaultAsync(x => x.Id == id);
+        if (s is null || s.Status != ResitSessionStatus.Open || s.StartsAt <= DateTime.UtcNow || (s.BookingDeadline is not null && s.BookingDeadline <= DateTime.UtcNow)) { message = "Запись на это окно уже закрыта."; return; }
+        var active = s.Bookings.Count(x => x.Status == BookingStatus.Active);
+        if (active >= s.Capacity) { message = "Свободных мест больше нет."; await tx.RollbackAsync(); await Load(); return; }
+        if (s.Bookings.Any(x => x.StudentId == studentId && x.Status == BookingStatus.Active)) { message = "Вы уже записаны на это окно."; await tx.RollbackAsync(); return; }
+        var booking = new Booking { StudentId = studentId, ResitSessionId = id, CreatedAtUtc = DateTime.UtcNow, Status = BookingStatus.Active };
+        Db.Bookings.Add(booking);
+        Db.Notifications.Add(new Notification { UserId = userId, ResitSessionId = id, Booking = booking, Title = "Запись подтверждена", Message = $"Вы записаны на {s.StartsAt.ToLocalTime():dd.MM.yyyy HH:mm}.", CreatedAtUtc = DateTime.UtcNow });
+        try { await Db.SaveChangesAsync(); await tx.CommitAsync(); message = "Запись подтверждена."; }
+        catch (Exception ex) when (ex is DbUpdateException || ex is Npgsql.PostgresException { SqlState: "40001" }) { await tx.RollbackAsync(); Db.ChangeTracker.Clear(); message = "Не удалось записаться: возможно, последнее место уже заняли."; }
+        await Load();
+    }
+    private async Task CancelBooking(int id) {
+        var b = await Db.Bookings.SingleOrDefaultAsync(x => x.ResitSessionId == id && x.StudentId == studentId && x.Status == BookingStatus.Active);
+        if (b is null) return;
+        var s = await Db.ResitSessions.FindAsync(id);
+        if (s is null || s.StartsAt <= DateTime.UtcNow || (s.BookingDeadline is not null && s.BookingDeadline <= DateTime.UtcNow)) { message = "Срок отмены записи истёк."; return; }
+        b.Status = BookingStatus.Cancelled; await Db.SaveChangesAsync(); message = "Запись отменена. Место снова доступно."; await Load();
+    }
+    private async Task AddComment(int id) {
+        var text = commentText.Trim(); if (text.Length == 0 || text.Length > 2000) return;
+        var canComment = await Db.Bookings.AnyAsync(x => x.ResitSessionId == id && x.StudentId == studentId && x.Status == BookingStatus.Active);
+        if (!canComment) { message = "Комментарии доступны записанным студентам."; return; }
+        Db.Comments.Add(new Comment { ResitSessionId = id, AuthorUserId = userId, Text = text, CreatedAtUtc = DateTime.UtcNow }); await Db.SaveChangesAsync(); commentText = ""; await Load();
+    }
+    private static string StatusText(ResitSessionStatus status, int free = 1) => status switch { ResitSessionStatus.Open when free <= 0 => "Заполнено", ResitSessionStatus.Open => "Открыто", ResitSessionStatus.Cancelled => "Отменено", _ => "Закрыто" };
+}

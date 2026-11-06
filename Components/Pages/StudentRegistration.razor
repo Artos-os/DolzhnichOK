@@ -1,0 +1,26 @@
+@page "/registratsiya"
+@layout Layout.BlankLayout
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+
+<PageTitle>Регистрация студента — ДолжничОК</PageTitle>
+<div class="login-page"><a class="brand login-brand" href="/" aria-label="ДолжничОК — на главную"><span class="brand-mark">Д</span><span>Должнич<span class="brand-accent">ОК</span></span></a>
+    <main class="login-card"><p class="eyebrow">Новый аккаунт</p><h1>Регистрация студента</h1>
+        @if (Error == "register") { <p class="form-message form-message-error" role="alert">Проверьте поля, выберите группу и используйте уникальный логин и почту. Пароль должен содержать не менее 8 символов.</p> }
+        @if (groups.Count == 0) { <p>Регистрация пока недоступна: администратор не настроил учебные группы.</p> }
+        else { <form method="post" action="/account/register-student"><AntiforgeryToken />
+            <label class="field-label" for="fullName">ФИО</label><input class="form-control" id="fullName" name="FullName" required minlength="2" maxlength="100" autocomplete="name" />
+            <label class="field-label" for="group">Учебная группа</label><select class="form-control" id="group" name="GroupId" required><option value="">Выберите группу</option>@foreach (var group in groups) { <option value="@group.Id">@group.Department.Name · @group.Code</option> }</select>
+            <label class="field-label" for="username">Логин</label><input class="form-control" id="username" name="UserName" required maxlength="256" autocomplete="username" />
+            <label class="field-label" for="email">Электронная почта</label><input class="form-control" id="email" type="email" name="Email" required maxlength="256" autocomplete="email" />
+            <label class="field-label" for="password">Пароль</label><input class="form-control" id="password" type="password" name="Password" required minlength="8" autocomplete="new-password" />
+            <div class="login-actions"><button class="button button-primary" type="submit">Создать аккаунт</button><a href="/" class="button button-outline">Назад</a></div>
+        </form> }
+    </main>
+</div>
+
+@code {
+    private List<StudentGroup> groups = [];
+    [SupplyParameterFromQuery(Name = "error")] private string? Error { get; set; }
+    protected override async Task OnInitializedAsync() => groups = await Db.StudentGroups.Include(x => x.Department).OrderBy(x => x.Department.Name).ThenBy(x => x.Code).ToListAsync();
+}

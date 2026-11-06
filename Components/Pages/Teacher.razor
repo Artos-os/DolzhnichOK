@@ -1,0 +1,99 @@
+@page "/prepodavatel"
+@rendermode InteractiveServer
+@attribute [Authorize(Roles = "Teacher")]
+@using System.Security.Claims
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+@inject AuthenticationStateProvider AuthState
+@inject NavigationManager Navigation
+
+<PageTitle>Моё расписание — ДолжничОК</PageTitle>
+<section class="page-frame">
+    <div class="page-heading"><div><p class="eyebrow">Кабинет преподавателя</p><h1>Моё расписание</h1></div><div class="user-actions"><span class="user-label">@teacherName</span><form method="post" action="/account/logout"><AntiforgeryToken /><button class="button button-outline" type="submit">Выйти</button></form></div></div>
+    <div class="form-divider"></div>
+    @if (!string.IsNullOrWhiteSpace(message)) { <p class="form-message" role="status">@message</p> }
+    <h2>@(editingId is null ? "Создать окно приёма" : "Изменить окно приёма")</h2>
+    @if (subjects.Count == 0 || rooms.Count == 0) { <div class="empty-state"><h2>Не настроены справочники</h2><p>Администратору нужно добавить предметы и аудитории для вашей кафедры.</p></div> }
+    else {
+    <EditForm Model="draft" OnValidSubmit="CreateSession"><DataAnnotationsValidator /><ValidationSummary class="validation-summary" />
+        <div class="form-grid">
+            <div class="form-field"><label class="field-label">Предмет</label><InputSelect class="form-control" @bind-Value="draft.SubjectId"><option value="0">Выберите предмет</option>@foreach (var x in subjects) { <option value="@x.Id">@x.Name</option> }</InputSelect><ValidationMessage For="@(() => draft.SubjectId)" /></div>
+            <div class="form-field"><label class="field-label">Аудитория</label><InputSelect class="form-control" @bind-Value="draft.ClassroomId"><option value="0">Выберите аудиторию</option>@foreach (var x in rooms) { <option value="@x.Id">@x.Number</option> }</InputSelect><ValidationMessage For="@(() => draft.ClassroomId)" /></div>
+            <div class="form-field"><label class="field-label">Дата</label><InputDate class="form-control" @bind-Value="draft.Date" /></div>
+            <div class="form-field"><label class="field-label">Время начала</label><input class="form-control" type="time" @bind="draft.Start" /></div>
+            <div class="form-field"><label class="field-label">Время окончания</label><input class="form-control" type="time" @bind="draft.End" /></div>
+            <div class="form-field"><label class="field-label">Количество мест</label><InputNumber class="form-control" @bind-Value="draft.Capacity" /><ValidationMessage For="@(() => draft.Capacity)" /></div>
+            <div class="form-field field-full"><label class="field-label">Дедлайн записи (необязательно)</label><InputDate class="form-control" @bind-Value="draft.Deadline" /></div>
+        </div>
+        @if (!string.IsNullOrWhiteSpace(validationError)) { <p class="form-message form-message-error" role="alert">@validationError</p> }
+        <div class="form-actions"><button class="button button-primary" type="submit">@(editingId is null ? "Создать окно" : "Сохранить изменения")</button>@if (editingId is not null) { <button class="button button-outline" type="button" @onclick="CancelEdit">Отмена</button> }</div>
+    </EditForm> }
+
+    <div class="form-divider"></div><h2>Мои окна приёма</h2>
+    @if (sessions.Count == 0) { <div class="empty-state"><p>Вы пока не создали окна приёма.</p></div> }
+    <div class="session-list">
+    @foreach (var s in sessions) {
+        var active = s.Bookings.Where(b => b.Status == BookingStatus.Active).ToList();
+        <article class="session-card"><div class="session-info"><h2>@s.Subject.Name · @s.StartsAt.ToLocalTime().ToString("dd.MM.yyyy HH:mm")–@s.EndsAt.ToLocalTime().ToString("HH:mm")</h2><p class="session-meta">@s.Classroom.Number · @s.Teacher.Department.Name · @StatusText(s.Status, active.Count, s.Capacity) · @active.Count/@s.Capacity мест</p>
+            <details><summary>Записавшиеся (@active.Count)</summary>@if (active.Count == 0) { <p>Пока никто не записался.</p> } else { <ul>@foreach (var b in active.OrderBy(b => b.Student.FullName)) { <li>@b.Student.FullName (@b.Student.Group.Code)</li> }</ul> }</details>
+            <details><summary>Комментарии (@s.Comments.Count)</summary><div class="comment-list">@foreach (var c in s.Comments.OrderBy(c => c.CreatedAtUtc)) { <p><strong>@c.Author.UserName</strong> · @c.CreatedAtUtc.ToLocalTime().ToString("dd.MM HH:mm")<br />@c.Text</p> }</div><div class="comment-compose"><input class="form-control" @bind="replyText" placeholder="Ответить участникам" maxlength="2000" /><button class="button button-outline" @onclick="() => Reply(s.Id)">Ответить</button></div></details>
+        </div><div class="session-actions">
+            @if (s.Status == ResitSessionStatus.Open) { <button class="button button-outline" @onclick="() => BeginEdit(s)">Изменить</button><button class="button button-outline" @onclick="() => CloseSession(s.Id)">Закрыть запись</button><button class="button button-outline" @onclick="() => CancelSession(s.Id)">Отменить окно</button> }
+        </div></article>
+    }
+    </div>
+</section>
+
+@code {
+    private int teacherId, userId;
+    private string teacherName = "Преподаватель", replyText = "";
+    private string? message, validationError;
+    private int? editingId;
+    private List<Subject> subjects = []; private List<Classroom> rooms = []; private List<ResitSession> sessions = [];
+    private Draft draft = new();
+    protected override async Task OnInitializedAsync() {
+        var user = (await AuthState.GetAuthenticationStateAsync()).User;
+        if (!int.TryParse(user.FindFirstValue(ClaimTypes.NameIdentifier), out userId)) { Navigation.NavigateTo("/"); return; }
+        var profile = await Db.Teachers.SingleOrDefaultAsync(x => x.UserId == userId); if (profile is null) { Navigation.NavigateTo("/"); return; }
+        teacherId = profile.Id; teacherName = profile.FullName;
+        subjects = await Db.Subjects.Where(x => x.DepartmentId == profile.DepartmentId).OrderBy(x => x.Name).ToListAsync();
+        rooms = await Db.Classrooms.Where(x => x.DepartmentId == profile.DepartmentId).OrderBy(x => x.Number).ToListAsync(); await Load();
+    }
+    private async Task Load() => sessions = await Db.ResitSessions.Where(x => x.TeacherId == teacherId).Include(x => x.Subject).Include(x => x.Classroom).Include(x => x.Teacher).ThenInclude(t => t.Department).Include(x => x.Bookings).ThenInclude(b => b.Student).ThenInclude(s => s.Group).Include(x => x.Comments).ThenInclude(c => c.Author).OrderByDescending(x => x.StartsAt).ToListAsync();
+    private async Task CreateSession() {
+        message = validationError = null;
+        var startLocal = DateTime.SpecifyKind(draft.Date.Date.Add(draft.Start.ToTimeSpan()), DateTimeKind.Local);
+        var endLocal = DateTime.SpecifyKind(draft.Date.Date.Add(draft.End.ToTimeSpan()), DateTimeKind.Local);
+        var subject = await Db.Subjects.AnyAsync(x => x.Id == draft.SubjectId && x.DepartmentId == (Db.Teachers.Where(t => t.Id == teacherId).Select(t => t.DepartmentId).FirstOrDefault()));
+        var room = await Db.Classrooms.AnyAsync(x => x.Id == draft.ClassroomId && x.DepartmentId == (Db.Teachers.Where(t => t.Id == teacherId).Select(t => t.DepartmentId).FirstOrDefault()));
+        if (!subject || !room) { validationError = "Выбранный предмет или аудитория недоступны вашей кафедре."; return; }
+        if (draft.Capacity < 1 || draft.Capacity > 30 || draft.End <= draft.Start) { validationError = "Проверьте лимит мест и время: окончание должно быть позже начала."; return; }
+        if (startLocal <= DateTime.Now) { validationError = "Укажите время в будущем."; return; }
+        DateTime? deadlineLocal = draft.Deadline is null ? null : DateTime.SpecifyKind(draft.Deadline.Value.Date.AddDays(1).AddTicks(-1), DateTimeKind.Local);
+        if (deadlineLocal is not null && deadlineLocal >= startLocal) { validationError = "Дедлайн записи должен быть раньше начала окна."; return; }
+        var start = startLocal.ToUniversalTime(); var end = endLocal.ToUniversalTime();
+        DateTime? deadline = deadlineLocal?.ToUniversalTime();
+        if (editingId is int editId) {
+            var existing = await Db.ResitSessions.Include(x => x.Bookings).ThenInclude(b => b.Student).SingleOrDefaultAsync(x => x.Id == editId && x.TeacherId == teacherId && x.Status == ResitSessionStatus.Open);
+            if (existing is null) { validationError = "Это окно уже закрыто или отменено."; editingId = null; await Load(); return; }
+            if (draft.Capacity < existing.Bookings.Count(b => b.Status == BookingStatus.Active)) { validationError = "Нельзя установить лимит меньше числа записавшихся студентов."; return; }
+            existing.SubjectId = draft.SubjectId; existing.ClassroomId = draft.ClassroomId; existing.StartsAt = start; existing.EndsAt = end; existing.BookingDeadline = deadline; existing.Capacity = draft.Capacity;
+            await NotifyActive(existing, "Окно изменено", "Преподаватель изменил время, место или лимит окна приёма.", cancelBookings: false); editingId = null; draft = new(); return;
+        }
+        var entity = new ResitSession { TeacherId = teacherId, SubjectId = draft.SubjectId, ClassroomId = draft.ClassroomId, StartsAt = start, EndsAt = end, BookingDeadline = deadline, Capacity = draft.Capacity, Status = ResitSessionStatus.Open };
+        Db.ResitSessions.Add(entity); await Db.SaveChangesAsync(); draft = new(); message = "Окно создано и опубликовано."; await Load();
+    }
+    private async Task CloseSession(int id) { var s = await OwnOpen(id); if (s is null) return; s.Status = ResitSessionStatus.Completed; await NotifyActive(s, "Запись закрыта", "Запись на окно закрыта преподавателем.", cancelBookings: false); }
+    private async Task CancelSession(int id) { var s = await OwnOpen(id); if (s is null) return; s.Status = ResitSessionStatus.Cancelled; await NotifyActive(s, "Окно отменено", "Преподаватель отменил окно приёма.", cancelBookings: true); }
+    private async Task<ResitSession?> OwnOpen(int id) { var s = await Db.ResitSessions.Include(x => x.Bookings).ThenInclude(b => b.Student).SingleOrDefaultAsync(x => x.Id == id && x.TeacherId == teacherId && x.Status == ResitSessionStatus.Open); if (s is null) message = "Окно уже изменено или недоступно."; return s; }
+    private async Task NotifyActive(ResitSession s, string title, string text, bool cancelBookings) {
+        var now = DateTime.UtcNow;
+        foreach (var b in s.Bookings.Where(x => x.Status == BookingStatus.Active)) { if (cancelBookings) b.Status = BookingStatus.Cancelled; Db.Notifications.Add(new Notification { UserId = b.Student.UserId, ResitSessionId = s.Id, BookingId = b.Id, Title = title, Message = text, CreatedAtUtc = now }); }
+        await Db.SaveChangesAsync(); message = title + ". Студенты уведомлены."; await Load();
+    }
+    private async Task Reply(int id) { var text = replyText.Trim(); if (text.Length == 0) return; if (!await Db.ResitSessions.AnyAsync(x => x.Id == id && x.TeacherId == teacherId)) return; Db.Comments.Add(new Comment { ResitSessionId = id, AuthorUserId = userId, Text = text, CreatedAtUtc = DateTime.UtcNow }); await Db.SaveChangesAsync(); replyText = ""; await Load(); }
+    private void BeginEdit(ResitSession s) { var start = s.StartsAt.ToLocalTime(); var end = s.EndsAt.ToLocalTime(); editingId = s.Id; draft = new Draft { SubjectId = s.SubjectId, ClassroomId = s.ClassroomId, Capacity = s.Capacity, Date = start.Date, Start = TimeOnly.FromDateTime(start), End = TimeOnly.FromDateTime(end), Deadline = s.BookingDeadline?.ToLocalTime().Date }; validationError = null; message = null; }
+    private void CancelEdit() { editingId = null; draft = new(); validationError = null; }
+    private static string StatusText(ResitSessionStatus s, int booked, int capacity) => s switch { ResitSessionStatus.Open when booked >= capacity => "Заполнено", ResitSessionStatus.Open => "Открыто", ResitSessionStatus.Cancelled => "Отменено", _ => "Закрыто" };
+    private sealed class Draft { [Range(1, int.MaxValue, ErrorMessage="Выберите предмет.")] public int SubjectId { get; set; } [Range(1, int.MaxValue, ErrorMessage="Выберите аудиторию.")] public int ClassroomId { get; set; } [Range(1,30,ErrorMessage="От 1 до 30 мест.")] public int Capacity { get; set; } = 10; public DateTime Date { get; set; } = DateTime.Today.AddDays(1); public TimeOnly Start { get; set; } = new(14,30); public TimeOnly End { get; set; } = new(16,0); public DateTime? Deadline { get; set; } }
+}

@@ -1,0 +1,8 @@
+<header class="site-header">
+    <a class="brand" href="/" aria-label="ДолжничОК — на главную"><span class="brand-mark">Д</span><span>Должнич<span class="brand-accent">ОК</span></span></a>
+    <nav class="main-nav" aria-label="Основная навигация">
+        <AuthorizeView Roles="Student"><Authorized><NavLink href="/student" class="nav-link">Окна приёма</NavLink></Authorized></AuthorizeView>
+        <AuthorizeView Roles="Teacher"><Authorized><NavLink href="/prepodavatel" class="nav-link">Моё расписание</NavLink></Authorized></AuthorizeView>
+    </nav>
+    <AuthorizeView><Authorized><div class="user-actions"><span class="user-label">@context.User.Identity?.Name</span><form method="post" action="/account/logout"><AntiforgeryToken /><button class="header-exit" type="submit">Выйти</button></form></div></Authorized></AuthorizeView>
+</header>

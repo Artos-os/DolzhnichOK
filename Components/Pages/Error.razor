@@ -1,0 +1,23 @@
+@page "/Error"
+@using System.Diagnostics
+
+<PageTitle>Ошибка — ДолжничОК</PageTitle>
+
+<h1>Не удалось открыть страницу</h1>
+<p>Попробуйте обновить страницу. Если ошибка повторится, сообщите об этом разработчику проекта.</p>
+
+@if (ShowRequestId)
+{
+    <p>Номер ошибки: <code>@RequestId</code></p>
+}
+
+@code {
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private string? RequestId { get; set; }
+    private bool ShowRequestId => !string.IsNullOrEmpty(RequestId);
+
+    protected override void OnInitialized() =>
+        RequestId = Activity.Current?.Id ?? HttpContext?.TraceIdentifier;
+}

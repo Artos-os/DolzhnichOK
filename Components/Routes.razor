@@ -1,0 +1,12 @@
+﻿<Router AppAssembly="typeof(Program).Assembly">
+    <Found Context="routeData">
+        <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(Layout.MainLayout)">
+            <NotAuthorized>
+                <LayoutView Layout="typeof(Layout.BlankLayout)">
+                    <main class="login-card"><h1>Нужен вход</h1><p>Войдите в систему, чтобы открыть эту страницу.</p><a class="button button-primary" href="/">Перейти ко входу</a></main>
+                </LayoutView>
+            </NotAuthorized>
+        </AuthorizeRouteView>
+        <FocusOnNavigate RouteData="routeData" Selector="h1" />
+    </Found>
+</Router>
